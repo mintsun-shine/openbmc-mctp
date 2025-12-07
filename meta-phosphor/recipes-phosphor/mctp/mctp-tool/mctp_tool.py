@@ -87,6 +87,71 @@ class MctpTool(dbus.service.Object):
             print(f"Error in SendRecv: {e}")
             raise dbus.exceptions.DBusException(f"xyz.openbmc_project.Common.Error.InternalFailure: {str(e)}")
 
+    @dbus.service.method(IFACE_NAME, in_signature='say', out_signature='')
+    def SendRawPacket(self, interface, payload):
+        """
+        Send a raw MCTP packet to a specific interface.
+        :param interface: Interface name (e.g., mctpi2c15)
+        :param payload: Full MCTP packet (Header + Body)
+        """
+        print(f"SendRawPacket: Iface={interface}, Len={len(payload)}")
+        try:
+            # AF_PACKET = 17
+            # ETH_P_ALL = 0x0003 (htons not strictly needed if we bind) or specific MCTP EtherType if applicable.
+            # MCTP over serial/binding usually sits on top of tty or i2c, but AF_PACKET allows sending to the netdev.
+            # We use ETH_P_ALL to validly bind.
+            ETH_P_ALL = 3
+            
+            s = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(ETH_P_ALL))
+            s.bind((interface, 0))
+            s.send(bytes(payload))
+            s.close()
+            print("Raw packet sent successfully")
+            
+        except Exception as e:
+            print(f"Error sending raw packet: {e}")
+            raise dbus.exceptions.DBusException(f"xyz.openbmc_project.Common.Error.InternalFailure: {str(e)}")
+
+    @dbus.service.method(IFACE_NAME, in_signature='sayq', out_signature='ay')
+    def SendReceiveRawPacket(self, interface, payload, timeout_ms):
+        """
+        Send a raw MCTP packet and wait for the next incoming packet on the interface.
+        :param interface: Interface name
+        :param payload: Full MCTP packet
+        :param timeout_ms: Timeout in milliseconds
+        """
+        print(f"SendReceiveRawPacket: Iface={interface}, len={len(payload)}, timeout={timeout_ms}")
+        try:
+            ETH_P_ALL = 3
+            PACKET_OUTGOING = 4
+            
+            s = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(ETH_P_ALL))
+            s.bind((interface, 0))
+            s.settimeout(timeout_ms / 1000.0)
+            
+            s.send(bytes(payload))
+            
+            while True:
+                data, addr = s.recvfrom(4096)
+                # addr tuple: (ifname, proto, pkttype, hatype, addr)
+                pkttype = addr[2]
+                
+                # Filter out the packet we just sent (OUTGOING)
+                if pkttype == PACKET_OUTGOING:
+                    continue
+                    
+                # Return the first incoming packet
+                s.close()
+                print(f"Received raw packet: {len(data)} bytes")
+                return dbus.Array(data, signature='y')
+
+        except socket.timeout:
+            print("Timeout waiting for raw response")
+            raise dbus.exceptions.DBusException("xyz.openbmc_project.Common.Error.Timeout: Request Timed Out")
+        except Exception as e:
+            print(f"Error in SendReceiveRawPacket: {e}")
+            raise dbus.exceptions.DBusException(f"xyz.openbmc_project.Common.Error.InternalFailure: {str(e)}")
+
 def main():
     dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
     bus = dbus.SystemBus()
