@@ -1,0 +1,12 @@
+[Unit]
+Description=MCTP Generic Tool Service
+After=mctpd.service
+
+[Service]
+ExecStart=/usr/bin/env mctp_tool.py
+Type=simple
+Restart=on-failure
+SyslogIdentifier=mctp-tool
+
+[Install]
+WantedBy=multi-user.target
