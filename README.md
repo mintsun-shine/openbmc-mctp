@@ -1,206 +1,195 @@
-# OpenBMC
+# OpenBMC MCTP Tool
 
-[![Build Status](https://jenkins.openbmc.org/buildStatus/icon?job=latest-master)](https://jenkins.openbmc.org/job/latest-master/)
+OpenBMC에서 MCTP (Management Component Transport Protocol) 메시지를 DBus를 통해 전송할 수 있는 Python 기반 서비스입니다.
 
-OpenBMC is a Linux distribution for management controllers used in devices such
-as servers, top of rack switches or RAID appliances. It uses
-[Yocto](https://www.yoctoproject.org/),
-[OpenEmbedded](https://www.openembedded.org/wiki/Main_Page),
-[systemd](https://www.freedesktop.org/wiki/Software/systemd/), and
-[D-Bus](https://www.freedesktop.org/wiki/Software/dbus/) to allow easy
-customization for your platform.
+## 프로젝트 구성
 
-## Setting up your OpenBMC project
-
-### 1) Prerequisite
-
-See the
-[Yocto documentation](https://docs.yoctoproject.org/ref-manual/system-requirements.html#required-packages-for-the-build-host)
-for the latest requirements
-
-#### Ubuntu
-
-```sh
-sudo apt install git gcc g++ make file wget \
-    gawk diffstat bzip2 cpio chrpath zstd lz4 bzip2
+```
+openbmc-mctp/
+└── meta-phosphor/
+    └── recipes-phosphor/
+        └── mctp/
+            └── mctp-tool/
+                ├── mctp_tool.py                               # MCTP DBus 서비스
+                └── xyz.openbmc_project.Mctp.Tool.service      # systemd 서비스
 ```
 
-#### Fedora
+## 주요 기능
 
-```sh
-sudo dnf install git python3 gcc g++ gawk which bzip2 chrpath cpio \
-    hostname file diffutils diffstat lz4 wget zstd rpcgen patch
+Python 기반 DBus 서비스로 MCTP 메시지 송수신 기능 제공:
+
+- **Send**: MCTP 메시지 전송
+  - Signature: `yyay` (eid, msg_type, payload)
+  
+- **SendRecv**: MCTP 메시지 송신 및 응답 수신
+  - Signature: `yyayq` (eid, msg_type, payload, timeout_ms)
+
+### DBus Interface
+
+**Service**: `xyz.openbmc_project.Mctp.Tool`  
+**Object Path**: `/xyz/openbmc_project/mctp/tool`  
+**Interface**: `xyz.openbmc_project.Mctp.Tool`
+
+**Methods**:
+- `Send(yyay) -> ()`
+  - `eid`: uint8 - Destination EID
+  - `msg_type`: uint8 - MCTP message type (0x01=PLDM, 0x7E=VDM, etc.)
+  - `payload`: array of bytes - Message payload (Header + Body)
+
+- `SendRecv(yyayq) -> (ay)`
+  - `eid`: uint8 - Destination EID
+  - `msg_type`: uint8 - MCTP message type
+  - `payload`: array of bytes - Message payload
+  - `timeout_ms`: uint16 - Timeout in milliseconds
+  - Returns: array of bytes - Response payload
+
+## 지원 플랫폼
+
+- Intel Granite Rapids-SP (GNR-SP)
+- AMD Turin
+- AST2600 기반 BMC
+
+---
+
+## 배포 가이드
+
+### 1. BMC 환경 확인
+
+```bash
+# BMC에 SSH 접속
+ssh root@<BMC_IP>
+
+# Python 환경 확인
+python3 --version
+python3 -c "import dbus; import dbus.service; from gi.repository import GLib; print('✅ Python 패키지 OK')"
+
+# MCTP 커널 모듈 확인
+lsmod | grep mctp
+ls /sys/class/net/ | grep mctp
 ```
 
-### 2) Download the source
+### 2. 파일 전송
 
-```sh
-git clone https://github.com/openbmc/openbmc
-cd openbmc
+```bash
+# 워크스테이션에서 실행
+cd meta-phosphor/recipes-phosphor/mctp/mctp-tool
+
+# mctp_tool.py 전송
+scp mctp_tool.py root@<BMC_IP>:/usr/bin/
+
+# systemd 서비스 파일 전송
+scp xyz.openbmc_project.Mctp.Tool.service root@<BMC_IP>:/lib/systemd/system/
 ```
 
-### 3) Target your hardware
+### 3. BMC에서 설정
 
-Any build requires an environment set up according to your hardware target.
-There is a special script in the root of this repository that can be used to
-configure the environment as needed. The script is called `setup` and takes the
-name of your hardware target as an argument.
+```bash
+# 1. 실행 권한 부여
+chmod +x /usr/bin/mctp_tool.py
 
-The script needs to be sourced while in the top directory of the OpenBMC
-repository clone, and, if run without arguments, will display the list of
-supported hardware targets, see the following example:
+# 2. DBus 정책 파일 생성
+cat > /etc/dbus-1/system.d/xyz.openbmc_project.Mctp.Tool.conf << 'EOF'
+<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-BUS Bus Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
+<busconfig>
+  <policy user="root">
+    <allow own="xyz.openbmc_project.Mctp.Tool"/>
+    <allow send_destination="xyz.openbmc_project.Mctp.Tool"/>
+  </policy>
+  <policy context="default">
+    <allow send_destination="xyz.openbmc_project.Mctp.Tool"/>
+  </policy>
+</busconfig>
+EOF
 
-```text
-$ . setup <machine> [build_dir]
-Target machine must be specified. Use one of:
-...
+# 3. systemd 서비스 활성화
+systemctl daemon-reload
+systemctl enable xyz.openbmc_project.Mctp.Tool
+systemctl start xyz.openbmc_project.Mctp.Tool
+
+# 4. 서비스 상태 확인
+systemctl status xyz.openbmc_project.Mctp.Tool
 ```
 
-A more complete list of supported machines can be found under
-[meta-phosphor/docs](https://github.com/openbmc/openbmc/blob/master/meta-phosphor/docs/supported-machines.md).
+### 4. 테스트
 
-Once you know the target (e.g. romulus), source the `setup` script as follows:
+```bash
+# DBus 서비스 확인
+busctl list | grep Mctp
 
-```sh
-. setup romulus
+# 인터페이스 확인
+busctl introspect xyz.openbmc_project.Mctp.Tool /xyz/openbmc_project/mctp/tool
+
+# Send 메서드 테스트 (MCTP 하드웨어 없으면 에러 예상)
+busctl call xyz.openbmc_project.Mctp.Tool /xyz/openbmc_project/mctp/tool \
+  xyz.openbmc_project.Mctp.Tool Send yyay 8 1 4 128 0 2 1
 ```
 
-### 4) Build
+---
 
-```sh
-bitbake obmc-phosphor-image
+## 트러블슈팅
+
+### 서비스 로그 확인
+```bash
+journalctl -u xyz.openbmc_project.Mctp.Tool -n 100
+journalctl -u xyz.openbmc_project.Mctp.Tool -f
 ```
 
-Additional details can be found in the [docs](https://github.com/openbmc/docs)
-repository.
+### DBus 권한 문제
+```bash
+# DBus 서비스 목록 확인
+dbus-send --system --print-reply --dest=org.freedesktop.DBus \
+  /org/freedesktop/DBus org.freedesktop.DBus.ListNames
+```
 
-## OpenBMC Development
+### MCTP 하드웨어 확인
+```bash
+# MCTP 네트워크 인터페이스
+ip link show | grep mctp
 
-The OpenBMC community maintains a set of tutorials new users can go through to
-get up to speed on OpenBMC development out
-[here](https://github.com/openbmc/docs/blob/master/development/README.md)
+# MCTP 라우팅 테이블
+cat /proc/net/mctp/routes
+```
 
-## Build Validation and Testing
+---
 
-Commits submitted by members of the OpenBMC GitHub community are compiled and
-tested via our [Jenkins](https://jenkins.openbmc.org/) server. Commits are run
-through two levels of testing. At the repository level the makefile `make check`
-directive is run. At the system level, the commit is built into a firmware image
-and run with an arm-softmmu QEMU model against a barrage of
-[CI tests](https://jenkins.openbmc.org/job/CI-MISC/job/run-ci-in-qemu/).
+## REST API 연동
 
-Commits submitted by non-members do not automatically proceed through CI
-testing. After visual inspection of the commit, a CI run can be manually
-performed by the reviewer.
+이 DBus 서비스를 Redfish REST API로 노출하려면 [bmcweb-mctp-restful-api](https://github.com/your-org/bmcweb-mctp-restful-api) 레포지토리를 참고하세요.
 
-Automated testing against the QEMU model along with supported systems are
-performed. The OpenBMC project uses the
-[Robot Framework](http://robotframework.org/) for all automation. Our complete
-test repository can be found
-[here](https://github.com/openbmc/openbmc-test-automation).
+---
 
-## Submitting Patches
+## 아키텍처
 
-Support of additional hardware and software packages is always welcome. Please
-follow the
-[contributing guidelines](https://github.com/openbmc/docs/blob/master/CONTRIBUTING.md)
-when making a submission. It is expected that contributions contain test cases.
+```
+┌─────────────────────────────────────────┐
+│  mctp_tool.py (DBus Service)            │
+│  - Send(eid, msg_type, payload)         │
+│  - SendRecv(eid, msg_type, payload, ms) │
+└──────────────┬──────────────────────────┘
+               │ AF_MCTP Socket
+               ▼
+┌─────────────────────────────────────────┐
+│  Linux Kernel MCTP Stack                │
+│  - /sys/class/net/mctpi2c*              │
+│  - /proc/net/mctp/routes                │
+└──────────────┬──────────────────────────┘
+               │ I2C/I3C/PCIe
+               ▼
+┌─────────────────────────────────────────┐
+│  MCTP Endpoint Devices                  │
+│  (NVMe, GPU, Switch, etc.)              │
+└─────────────────────────────────────────┘
+```
 
-## Bug Reporting
+---
 
-[Issues](https://github.com/openbmc/openbmc/issues) are managed on GitHub. It is
-recommended you search through the issues before opening a new one.
+## 참고 자료
 
-## Questions
+- [OpenBMC 공식 문서](https://github.com/openbmc/docs)
+- [MCTP Base Specification](https://www.dmtf.org/standards/pmci)
+- [PLDM Specification](https://www.dmtf.org/standards/pmci)
 
-First, please do a search on the internet. There's a good chance your question
-has already been asked.
+## 라이선스
 
-For general questions, please use the openbmc tag on
-[Stack Overflow](https://stackoverflow.com/questions/tagged/openbmc). Please
-review the
-[discussion](https://meta.stackexchange.com/questions/272956/a-new-code-license-the-mit-this-time-with-attribution-required?cb=1)
-on Stack Overflow licensing before posting any code.
-
-For technical discussions, please see [contact info](#contact) below for Discord
-and mailing list information. Please don't file an issue to ask a question.
-You'll get faster results by using the mailing list or Discord.
-
-### Will OpenBMC run on my Acme Server Corp. XYZ5000 motherboard?
-
-This is a common question, particularly regarding boards from popular COTS
-(commercial off-the-shelf) vendors such as Supermicro and ASRock. You can see
-the list of supported boards by running `. setup` (with no further arguments) in
-the root of the OpenBMC source tree. Most of the platforms supported by OpenBMC
-are specialized servers operated by companies running large datacenters, but
-some more generic COTS servers are supported to varying degrees.
-
-If your motherboard is not listed in the output of `. setup` it is not currently
-supported. Porting OpenBMC to a new platform is a non-trivial undertaking,
-ideally done with the assistance of schematics and other documentation from the
-manufacturer (it is not completely infeasible to take on a porting effort
-without documentation via reverse engineering, but it is considerably more
-difficult, and probably involves a greater risk of hardware damage).
-
-**However**, even if your motherboard is among those listed in the output of
-`. setup`, there are two significant caveats to bear in mind. First, not all
-ports are equally mature -- some platforms are better supported than others, and
-functionality on some "supported" boards may be fairly limited. Second, support
-for a motherboard is not the same as support for a complete system -- in
-particular, fan control is critically dependent on not just the motherboard but
-also the fans connected to it and the chassis that the board and fans are housed
-in, both of which can vary dramatically between systems using the same board
-model. So while you may be able to compile and install an OpenBMC build on your
-system and get some basic functionality, rough edges (such as your cooling fans
-running continuously at full throttle) are likely.
-
-See also
-["Supported Machines"](https://github.com/openbmc/openbmc/blob/master/meta-phosphor/docs/supported-machines.md).
-
-## Features of OpenBMC
-
-### Feature List
-
-- Host management: Power, Cooling, LEDs, Inventory, Events, Watchdog
-- Full IPMI 2.0 Compliance with DCMI
-- Code Update Support for multiple BMC/BIOS images
-- Web-based user interface
-- REST interfaces
-- D-Bus based interfaces
-- SSH based SOL
-- Remote KVM
-- Hardware Simulation
-- Automated Testing
-- User management
-- Virtual media
-
-### Features In Progress
-
-- OpenCompute Redfish Compliance
-- Verified Boot
-
-### Features Requested but need help
-
-- OpenBMC performance monitoring
-
-## Finding out more
-
-Dive deeper into OpenBMC by opening the [docs](https://github.com/openbmc/docs)
-repository.
-
-## Technical Steering Committee
-
-The Technical Steering Committee (TSC) guides the project. Members are:
-
-- Benjamin Fair, Google
-- Patrick Williams, Meta
-- Roxanne Clarke, IBM
-- Sagar Dharia, Microsoft
-- Samer El-Haj-Mahmoud, Arm
-- Terry Duncan, Intel
-
-## Contact
-
-- Mail: openbmc@lists.ozlabs.org
-  [https://lists.ozlabs.org/listinfo/openbmc](https://lists.ozlabs.org/listinfo/openbmc)
-- Discord: [https://discord.gg/69Km47zH98](https://discord.gg/69Km47zH98)
+Apache 2.0
