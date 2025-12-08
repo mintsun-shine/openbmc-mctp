@@ -20,7 +20,6 @@ Python 기반 DBus 서비스로 MCTP 메시지 송수신 기능 제공:
 
 - **Send**: MCTP 메시지 전송
   - Signature: `yyay` (eid, msg_type, payload)
-  
 - **SendRecv**: MCTP 메시지 송신 및 응답 수신
   - Signature: `yyayq` (eid, msg_type, payload, timeout_ms)
 
@@ -31,7 +30,9 @@ Python 기반 DBus 서비스로 MCTP 메시지 송수신 기능 제공:
 **Interface**: `xyz.openbmc_project.Mctp.Tool`
 
 **Methods**:
+
 - `Send(yyay) -> ()`
+
   - `eid`: uint8 - Destination EID
   - `msg_type`: uint8 - MCTP message type (0x01=PLDM, 0x7E=VDM, etc.)
   - `payload`: array of bytes - Message payload (Header + Body)
@@ -130,12 +131,14 @@ busctl call xyz.openbmc_project.Mctp.Tool /xyz/openbmc_project/mctp/tool \
 ## 트러블슈팅
 
 ### 서비스 로그 확인
+
 ```bash
 journalctl -u xyz.openbmc_project.Mctp.Tool -n 100
 journalctl -u xyz.openbmc_project.Mctp.Tool -f
 ```
 
 ### DBus 권한 문제
+
 ```bash
 # DBus 서비스 목록 확인
 dbus-send --system --print-reply --dest=org.freedesktop.DBus \
@@ -143,6 +146,7 @@ dbus-send --system --print-reply --dest=org.freedesktop.DBus \
 ```
 
 ### MCTP 하드웨어 확인
+
 ```bash
 # MCTP 네트워크 인터페이스
 ip link show | grep mctp
@@ -155,7 +159,7 @@ cat /proc/net/mctp/routes
 
 ## REST API 연동
 
-이 DBus 서비스를 Redfish REST API로 노출하려면 [bmcweb-mctp-restful-api](https://github.com/your-org/bmcweb-mctp-restful-api) 레포지토리를 참고하세요.
+이 DBus 서비스를 Redfish REST API로 노출하려면 [bmcweb-mctp-restful-api](https://github.com/mintsun-shine/bmcweb-mctp-restful-api) 레포지토리를 참고하세요.
 
 ---
 
